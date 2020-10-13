@@ -7,7 +7,7 @@ use std::io;
 use std::thread;
 // use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
-// use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::HashSet;
 use std::sync::Mutex;
 use stopwatch::{Stopwatch};
 use openssl::ssl::{SslMethod, SslConnector};
@@ -42,7 +42,7 @@ pub struct TimingStats {
 
 impl TimingStats {
     pub fn print(&self) {
-        println!("mean time: {}\nmedian time: {}\nmax time: {}\nmin time: {}\n", self.mean, self.median, self.max, self.min);
+        println!("mean time: {}\nmedian time: {}\nmax time: {}\nmin time: {}", self.mean, self.median, self.max, self.min);
     }
 }
 
@@ -70,14 +70,20 @@ fn main() {
             process::exit(0x0100);
         },
         "--profile" => {
-            let trials = 20;
+            let trials = match args().nth(2).expect("--profile missing integer number of requests argument").parse::<u16>() {
+                Ok(trials) => trials,
+                Err(e) => {
+                    println!("Error parsing # of trials: {}", e);
+                    process::exit(0x0100);
+                }
+            };
             println!("Begining diagnostics");
             let successful = Arc::new(Mutex::new(0));
             let total = Arc::new(Mutex::new(std::usize::MIN)); //total bytes
             let mut handles = vec![];
             let max_bytes = Arc::new(Mutex::new(std::usize::MIN));
             let min_bytes = Arc::new(Mutex::new(std::usize::MAX));
-
+            let error_codes = Arc::new(Mutex::new(HashSet::new()));
             let times = Arc::new(Mutex::new(vec![]));
 
             for _ in 0..trials {
@@ -87,8 +93,10 @@ fn main() {
                 let min_bytes = Arc::clone(&min_bytes);
 
                 let times = Arc::clone(&times);
+                let error_codes = Arc::clone(&error_codes);
+
                 let handle = thread::spawn(move || {
-                let sw = Stopwatch::start_new();
+                    let sw = Stopwatch::start_new();
                     match request_profile() {
                         Ok(bytes) => {
                             let mut tms = times.lock().unwrap();
@@ -106,7 +114,8 @@ fn main() {
                             if *min > bytes { *min = bytes }
                         },
                         Err(e) => {
-                            println!("Error: {}",e);
+                            let mut errors = error_codes.lock().unwrap();
+                            errors.insert(e.kind());
                         }
                     }
                 });
@@ -117,8 +126,15 @@ fn main() {
                 handle.join().unwrap();
             }
             let success_count = *successful.lock().unwrap();
-            println!("Succesful reads: {}, averaging bytes: {}, min bytes: {}, max bytes: {}", success_count, *total.lock().unwrap() as i64/success_count as i64, *min_bytes.lock().unwrap(), *max_bytes.lock().unwrap());
-            println!("Failures: {}", trials - success_count);
+            let errors = &*error_codes.lock().unwrap();
+            println!("Success: {}%\naveraging bytes: {}\nmin bytes: {}\nmax bytes: {}", success_count as f32*100.0/trials as f32, *total.lock().unwrap() as i64/success_count as i64, *min_bytes.lock().unwrap(), *max_bytes.lock().unwrap());
+            if errors.len() > 0 {
+                println!("Errors: {}", trials - success_count);
+            }
+            for e in errors.into_iter() {
+                println!("   {:?}", e);
+            }
+            
             let statistics = timing_statistics(&mut *times.lock().unwrap());
             statistics.print();
             process::exit(0x0100);
