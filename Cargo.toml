@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 dns-lookup = "1.0.4"
+stopwatch = "0.0.7"
