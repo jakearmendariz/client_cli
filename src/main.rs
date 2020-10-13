@@ -10,26 +10,26 @@ use std::sync::Arc;
 // use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use stopwatch::{Stopwatch};
-
+use openssl::ssl::{SslMethod, SslConnector};
 
 // http = 80, https = 443, ftp = 21, etc.) unless the port number is specifically typed in the URL (for example "http://www.simpledns.com:5000" = port 5000).
 fn request_profile() -> Result<usize,io::Error> {
-    let url = "jakearmendariz.com";
-    let port = 3030;
+    let url = "my-worker.jakearmendariz.workers.dev";
+    let port = 443;
     let path = "/";
 
-    // Open socket connection ip_lookup.join(".")
-    let mut stream = TcpStream::connect(format!("{}:{}",url,port))?;
+    // Open tcp socket connection. I used a ssl library I hope that is fine, very low on time
+    let connector = SslConnector::builder(SslMethod::tls()).unwrap().build();
+    let stream = TcpStream::connect(format!("{}:{}",url,port)).unwrap();
+    let mut stream = connector.connect(url, stream).unwrap();
 
     // Format HTTP request
     let header = format!("GET {} HTTP/1.1\r\nHost: {}\r\nConnection: Keep-Alive\r\n\r\n", path.clone(), url.clone());
-    // println!("{:?}", header);
     stream.write(header.as_bytes())?;
 
     let mut buffer = vec![0 as u8; 4096]; // using 4096 byte buffer (always large enough to read the page from profile)
-    // Make request and return response as string
+    // Make request and count # of bytes
     let bytes_read = stream.read(&mut buffer)?;
-    // println!("{}", bytes_read);
     return Ok(bytes_read);
 }
 
@@ -73,16 +73,18 @@ fn main() {
             let trials = 20;
             println!("Begining diagnostics");
             let successful = Arc::new(Mutex::new(0));
-            let total = Arc::new(Mutex::new(0)); //total bytes
+            let total = Arc::new(Mutex::new(std::usize::MIN)); //total bytes
             let mut handles = vec![];
-            let total_time = Arc::new(Mutex::new(0));
+            let max_bytes = Arc::new(Mutex::new(std::usize::MIN));
+            let min_bytes = Arc::new(Mutex::new(std::usize::MAX));
 
             let times = Arc::new(Mutex::new(vec![]));
 
             for _ in 0..trials {
                 let successful = Arc::clone(&successful);
                 let total = Arc::clone(&total); 
-                let total_time = Arc::clone(&total_time);
+                let max_bytes = Arc::clone(&max_bytes);
+                let min_bytes = Arc::clone(&min_bytes);
 
                 let times = Arc::clone(&times);
                 let handle = thread::spawn(move || {
@@ -97,8 +99,11 @@ fn main() {
                             let mut tot = total.lock().unwrap();
                             *tot += bytes;
 
-                            // let mut time = total_time.lock().unwrap();
-                            // *time += sw.elapsed_ms();
+                            let mut max = max_bytes.lock().unwrap();
+                            if *max < bytes { *max = bytes }
+
+                            let mut min = min_bytes.lock().unwrap();
+                            if *min > bytes { *min = bytes }
                         },
                         Err(e) => {
                             println!("Error: {}",e);
@@ -112,9 +117,7 @@ fn main() {
                 handle.join().unwrap();
             }
             let success_count = *successful.lock().unwrap();
-            // println!("Result: {}", *successful.lock().unwrap());
-            let average_time = *total_time.lock().unwrap() / success_count;
-            println!("Succesful reads: {}, averaging bytes: {}, average time: {} ms", success_count, *total.lock().unwrap() as i64/success_count as i64, average_time);
+            println!("Succesful reads: {}, averaging bytes: {}, min bytes: {}, max bytes: {}", success_count, *total.lock().unwrap() as i64/success_count as i64, *min_bytes.lock().unwrap(), *max_bytes.lock().unwrap());
             println!("Failures: {}", trials - success_count);
             let statistics = timing_statistics(&mut *times.lock().unwrap());
             statistics.print();
@@ -128,20 +131,6 @@ fn main() {
     }
 
     let path = "/";
-
-    // Attempt to convert host to IP address
-    //   let ip_lookup = get_host_ip(host).unwrap();
-    // let ip_lookup: Vec<std::net::IpAddr> = host.to_socket_addrs()
-    //     .expect("Unable to resolve domain")
-    //     .collect();
-    // println!("IP: {:?}", ip_lookup);\
-    // let server_details = "127.0.0.1:80";
-    // let server: Vec<_> = server_details
-    //     .to_socket_addrs()
-    //     .expect("Unable to resolve domain")
-    //     .collect();
-    // println!("{:?}", server);
-
 
     // Open socket connection ip_lookup.join(".")
     let mut stream = TcpStream::connect(format!("{}:{}",url,port))

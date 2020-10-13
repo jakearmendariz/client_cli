@@ -9,3 +9,5 @@ edition = "2018"
 [dependencies]
 dns-lookup = "1.0.4"
 stopwatch = "0.0.7"
+openssl = "0.10"
+openssl-sys = "0.9"
