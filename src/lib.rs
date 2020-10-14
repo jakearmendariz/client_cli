@@ -2,7 +2,7 @@ use std::io::prelude::*;
 use std::net::TcpStream;
 use std::io;
 // use std::thread;
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc};
 use std::collections::HashSet;
 use std::sync::Mutex;
 use stopwatch::{Stopwatch};
@@ -13,12 +13,12 @@ use lazy_static::lazy_static;
 use threadpool::ThreadPool;
 use std::cmp;
 
-const PROFILE_HOST:&str = "my-worker.jakearmendariz.workers.dev";
+const PROFILE_HOST:&str = "waterworksswim.com";//"my-worker.jakearmendariz.workers.dev";
 const HTTPS_PORT:u16 = 443;
 const PROFILE_PATH:&str = "/";
 // Time to wait before coutning request as a failure (in ms)
 const WAIT_TIME:i64 = 500;
-const MAX_THREADS:usize = 30;
+const MAX_THREADS:usize = 50;
 
 lazy_static! {
     static ref TIMES:std::sync::Arc<std::sync::Mutex<Vec<i64>>> = Arc::new(Mutex::new(vec![]));
@@ -29,37 +29,41 @@ pub fn multi_threaded_diagnostics(trials:u16) {
     let error_codes = Arc::new(Mutex::new(HashSet::new()));
     let thread_count = cmp::min(MAX_THREADS, trials as usize);
     let pool = ThreadPool::new(thread_count);
-    let barrier = Arc::new(Barrier::new(thread_count + 1));
+    // let barrier = Arc::new(Barrier::new(thread_count + 1));
 
     for i in 0..trials {
         let diagnostics = Arc::clone(&diagnostics);
         let error_codes = Arc::clone(&error_codes);
-        let barrier = barrier.clone();
+        // let barrier = barrier.clone();
 
         pool.execute(move || {
             let sw = Stopwatch::start_new();
             match request_profile(i) {
                 Ok(bytes) => {
-                    let mut diag = diagnostics.lock().unwrap();
-                    diag.times.push(sw.elapsed_ms() - WAIT_TIME);
+                    if bytes != 0 {
+                        let mut diag = diagnostics.lock().unwrap();
+                        diag.times.push(sw.elapsed_ms() - WAIT_TIME);
 
-                    diag.successful += 1;
+                        diag.successful += 1;
 
-                    diag.total += bytes;
+                        diag.total += bytes;
 
-                    if diag.max_bytes < bytes { diag.max_bytes = bytes }
+                        if diag.max_bytes < bytes { diag.max_bytes = bytes }
 
-                    if diag.min_bytes > bytes { diag.min_bytes = bytes }
+                        if diag.min_bytes > bytes { diag.min_bytes = bytes }
+                    }
                 },
                 Err(e) => {
                     let mut errors = error_codes.lock().unwrap();
                     errors.insert(e.kind());
                 }
             }
-            barrier.wait();
+            // barrier.wait();
         });
     }
-    barrier.wait();
+    pool.join();
+    assert_eq!(0, pool.active_count());
+    // barrier.wait();
     let mut diag = diagnostics.lock().unwrap();
     diag.print(trials);
     let errors = &*error_codes.lock().unwrap();
@@ -75,8 +79,9 @@ fn request_profile(request_id:u16) -> Result<usize,io::Error> {
     let connector = match SslConnector::builder(SslMethod::tls()){
         Ok(connector) => connector.build(),
         Err(_) => {
-            let ssl_error = Error::new(ErrorKind::Other, "ssl builder error");
-            return Err(ssl_error)
+            // let ssl_error = Error::new(ErrorKind::Other, "ssl builder error");
+            // return Err(ssl_error)
+            return Ok(0);
         }
     };
     let stream = match TcpStream::connect(format!("{}:{}",PROFILE_HOST,HTTPS_PORT)) {
@@ -89,8 +94,9 @@ fn request_profile(request_id:u16) -> Result<usize,io::Error> {
     let mut stream = match connector.connect(PROFILE_HOST, stream) {
         Ok(stream) => stream,
         Err(_) => {
-            let ssl_error = Error::new(ErrorKind::Other, "ssl could not connect");
-            return Err(ssl_error);
+            // let ssl_error = Error::new(ErrorKind::Other, "ssl could not connect");
+            // return Err(ssl_error);
+            return Ok(0);
         }
     };
 
@@ -140,8 +146,12 @@ struct Diagnostics {
 
 impl Diagnostics {
     pub fn print(&mut self, trials:u16){
-        println!("Success: {}%\naveraging bytes: {}\nmin bytes: {}\nmax bytes: {}", self.successful as f32*100.0/trials as f32, self.total as i64/self.successful as i64, self.min_bytes, self.max_bytes);
-        self.timing_statistics();
+        if self.successful > 0{
+            println!("Success: {}%\naveraging bytes: {}\nmin bytes: {}\nmax bytes: {}", self.successful as f32*100.0/trials as f32, self.total as i64/self.successful as i64, self.min_bytes, self.max_bytes);
+            self.timing_statistics();
+        }else {
+            println!("0 successful trials");
+        }
     }
 
     fn timing_statistics(&mut self) {
