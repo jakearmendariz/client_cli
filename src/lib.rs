@@ -1,8 +1,8 @@
 use std::io::prelude::*;
 use std::net::TcpStream;
 use std::io;
-use std::thread;
-use std::sync::Arc;
+// use std::thread;
+use std::sync::{Arc, Barrier};
 use std::collections::HashSet;
 use std::sync::Mutex;
 use stopwatch::{Stopwatch};
@@ -10,13 +10,15 @@ use openssl::ssl::{SslMethod, SslConnector};
 use std::time::Duration;
 use std::io::{Error, ErrorKind};
 use lazy_static::lazy_static;
-// use threadpool::ThreadPool;
+use threadpool::ThreadPool;
+use std::cmp;
 
 const PROFILE_HOST:&str = "my-worker.jakearmendariz.workers.dev";
 const HTTPS_PORT:u16 = 443;
 const PROFILE_PATH:&str = "/";
 // Time to wait before coutning request as a failure (in ms)
 const WAIT_TIME:i64 = 500;
+const MAX_THREADS:usize = 30;
 
 lazy_static! {
     static ref TIMES:std::sync::Arc<std::sync::Mutex<Vec<i64>>> = Arc::new(Mutex::new(vec![]));
@@ -25,15 +27,16 @@ lazy_static! {
 pub fn multi_threaded_diagnostics(trials:u16) {
     let diagnostics = Arc::new(Mutex::new(Diagnostics::default()));
     let error_codes = Arc::new(Mutex::new(HashSet::new()));
-    let mut handles = vec![];
-    // let pool = ThreadPool::new(42);
-
+    let thread_count = cmp::min(MAX_THREADS, trials as usize);
+    let pool = ThreadPool::new(thread_count);
+    let barrier = Arc::new(Barrier::new(thread_count + 1));
 
     for i in 0..trials {
         let diagnostics = Arc::clone(&diagnostics);
         let error_codes = Arc::clone(&error_codes);
+        let barrier = barrier.clone();
 
-        let handle = thread::spawn(move || {
+        pool.execute(move || {
             let sw = Stopwatch::start_new();
             match request_profile(i) {
                 Ok(bytes) => {
@@ -53,14 +56,10 @@ pub fn multi_threaded_diagnostics(trials:u16) {
                     errors.insert(e.kind());
                 }
             }
+            barrier.wait();
         });
-        handles.push(handle);
     }
-
-    //joins the threads
-    for handle in handles {
-        handle.join().unwrap();
-    }
+    barrier.wait();
     let mut diag = diagnostics.lock().unwrap();
     diag.print(trials);
     let errors = &*error_codes.lock().unwrap();
@@ -71,9 +70,15 @@ pub fn multi_threaded_diagnostics(trials:u16) {
 }
 
 // Connects and sends a get request to cloudfare worker host
-fn request_profile(_thread_id:u16) -> Result<usize,io::Error> {
+fn request_profile(request_id:u16) -> Result<usize,io::Error> {
     // Open tcp socket connection. I used a ssl library I hope that is fine
-    let connector = SslConnector::builder(SslMethod::tls()).unwrap().build();
+    let connector = match SslConnector::builder(SslMethod::tls()){
+        Ok(connector) => connector.build(),
+        Err(_) => {
+            let ssl_error = Error::new(ErrorKind::Other, "ssl builder error");
+            return Err(ssl_error)
+        }
+    };
     let stream = match TcpStream::connect(format!("{}:{}",PROFILE_HOST,HTTPS_PORT)) {
         Ok(stream) => stream,
         Err(e) => {
@@ -103,6 +108,7 @@ fn request_profile(_thread_id:u16) -> Result<usize,io::Error> {
             Ok(bytes) => bytes,
             Err(e) => {
                 //finished reading
+                println!("{}:{}",request_id, sw.elapsed_ms() - WAIT_TIME);
                 if total_bytes_read == 0 {
                     //timeout error
                     return Err(e);
