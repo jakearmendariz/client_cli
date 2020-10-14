@@ -10,21 +10,24 @@ use openssl::ssl::{SslMethod, SslConnector};
 use std::time::Duration;
 use std::io::{Error, ErrorKind};
 use lazy_static::lazy_static;
+// use threadpool::ThreadPool;
 
-const PROFILE_HOST:&str = "waterworksswim.com";//"my-worker.jakearmendariz.workers.dev";
+const PROFILE_HOST:&str = "my-worker.jakearmendariz.workers.dev";
 const HTTPS_PORT:u16 = 443;
 const PROFILE_PATH:&str = "/";
 // Time to wait before coutning request as a failure (in ms)
 const WAIT_TIME:i64 = 500;
 
 lazy_static! {
-    static ref LOCK:std::sync::Arc<std::sync::Mutex<i32>> = Arc::new(Mutex::new(0));
+    static ref TIMES:std::sync::Arc<std::sync::Mutex<Vec<i64>>> = Arc::new(Mutex::new(vec![]));
 }
 //Creates a thread for every single request. A pool with limited number of requests would be better, but this works on a small scale
 pub fn multi_threaded_diagnostics(trials:u16) {
     let diagnostics = Arc::new(Mutex::new(Diagnostics::default()));
     let error_codes = Arc::new(Mutex::new(HashSet::new()));
     let mut handles = vec![];
+    // let pool = ThreadPool::new(42);
+
 
     for i in 0..trials {
         let diagnostics = Arc::clone(&diagnostics);
@@ -68,7 +71,7 @@ pub fn multi_threaded_diagnostics(trials:u16) {
 }
 
 // Connects and sends a get request to cloudfare worker host
-fn request_profile(i:u16) -> Result<usize,io::Error> {
+fn request_profile(_thread_id:u16) -> Result<usize,io::Error> {
     // Open tcp socket connection. I used a ssl library I hope that is fine
     let connector = SslConnector::builder(SslMethod::tls()).unwrap().build();
     let stream = match TcpStream::connect(format!("{}:{}",PROFILE_HOST,HTTPS_PORT)) {
@@ -93,21 +96,15 @@ fn request_profile(i:u16) -> Result<usize,io::Error> {
     let mut buffer = vec![0 as u8; 4096];
     // Make request and count # of bytes
     let mut total_bytes_read = 0;
-    // let mut mutex = LOCK.lock().unwrap();
-    // while *mutex != 0 {}
-    // *mutex = 1;
     let sw = Stopwatch::start_new();
     stream.write(header.as_bytes())?;
-    //maybe try adding a mutex here so that other threds cannot read at the same time
     loop {
         let bytes_read = match stream.read(&mut buffer) {
             Ok(bytes) => bytes,
             Err(e) => {
-                println!("{}:{}", i, sw.elapsed_ms() - WAIT_TIME);
                 //finished reading
                 if total_bytes_read == 0 {
                     //timeout error
-                    // *mutex = 0;
                     return Err(e);
                 }
                 break;
@@ -115,11 +112,12 @@ fn request_profile(i:u16) -> Result<usize,io::Error> {
         };
         total_bytes_read += bytes_read;
     }
-    // *mutex = 0;
     if total_bytes_read == 0 {
         let empty_response = Error::new(ErrorKind::Other, "Empty Response From Server");
         return Err(empty_response);
     }
+    let mut times = TIMES.lock().unwrap();
+    times.push(sw.elapsed_ms() - WAIT_TIME);
     return Ok(total_bytes_read);
 }
 
@@ -141,10 +139,11 @@ impl Diagnostics {
     }
 
     fn timing_statistics(&mut self) {
-        let mean:f64 = self.times.iter().sum::<i64>() as f64 / self.times.len() as f64;
+        let times = TIMES.lock().unwrap();
+        let mean:f64 = times.iter().sum::<i64>() as f64 / times.len() as f64;
         self.times.sort();
-        let median = self.times[self.times.len()/2];
-        println!("mean time: {}\nmedian time: {}\nmax time: {}\nmin time: {}", mean, median, self.times.last().unwrap(), self.times[0]);
+        let median = times[times.len()/2];
+        println!("mean time: {}\nmedian time: {}\nmax time: {}\nmin time: {}", mean, median, times.last().unwrap(), times[0]);
     }
 }
 
