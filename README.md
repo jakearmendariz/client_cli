@@ -30,7 +30,7 @@ Not all websites had the same percent success rate. I expected sites like Google
 
 ### 1,000 requests: 100 threads
 ```
-sergeichestakov.com - my friend's website
+=====.com - my friend's website
 Success: 83.7%
 averaging bytes: 121872
 min bytes: 0
