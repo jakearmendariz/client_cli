@@ -1,62 +1,58 @@
 use std::io::prelude::*;
 use std::net::TcpStream;
 use std::str;
-use std::env::args;
 use std::process;
 use openssl::ssl::{SslMethod, SslConnector};
 use url::{Url};
 use std::time::Duration;
-
+use clap::{Arg, App};
 
 mod lib;
 
-fn print_help() {
-    println!("client tool. Run with client --url <url>");
-    println!("client --profile runs diagnostics on my-worker.jakearmendariz.workers.dev");
-}
-
 fn main() {
-    let flag = args().nth(1).expect("please provide an argument, --help for help");
-    let url;
-    match &flag[..] {
-        "--url" => {
-            url = args().nth(2).expect("--url missing url argument");
-            println!("using url: {:?}",url);
-        },
-        "--help" => {
-            print_help();
-            process::exit(0x0100);
-        },
-        "--profile" => {
-            let trials = match args().nth(2).expect("--profile missing integer number of requests argument").parse::<u16>() {
-                Ok(trials) => trials,
-                Err(_) => {
-                    if args().nth(2).expect("--profile missing integer number of requests argument") == "--x" {
-                        let single_trials = match args().nth(3).expect("--x missing integer number of requests argument").parse::<u16>() {
-                            Ok(trials) => trials,
-                            Err(e) => {
-                                println!("Error parsing # of trials: {}", e);
-                                process::exit(0x0100);
-                            }
-                        };
-                        lib::single_threaded_diagnostics(single_trials);
-                    }
-                    process::exit(0x0100);
-                }
-            };
-            if trials > 0 {
-                lib::multi_threaded_diagnostics(trials);
+    let arguments = App::new("Rust Client")
+        .author("Jake Armendariz <jakearmendariz99@gmail.com>")
+        .arg(Arg::with_name("url")
+            .long("url")
+            .help("Sets a custom url to ping")
+            .takes_value(true))
+        .arg(Arg::with_name("count")
+            .long("profile")
+            .short("p")
+            .help("Specifies to # of requests to send to https://my-worker.jakearmendariz.workers.dev/")
+            .takes_value(true))
+        .arg(Arg::with_name("single_count")
+            .long("single")
+            .short("s")
+            .help("Sequentially makes <count> requests to https://my-worker.jakearmendariz.workers.dev/")
+            .takes_value(true))
+        .get_matches();
+    
+
+    if arguments.occurrences_of("count") > 0 {
+        let trials = match arguments.value_of("count").unwrap().parse::<u16>() {
+            Ok(trials) => trials,
+            Err(e) => {
+                println!("Error: {}", e);
+                process::exit(0x0100);
             }
-            process::exit(0x0100);
-        },
-        _ => {
-            print_help();
-            process::exit(0x0100);
+        };
+        if arguments.occurrences_of("single_count") > 0 {
+            lib::single_threaded_diagnostics(trials);
+        }else {
+            lib::multi_threaded_diagnostics(trials);
         }
+        process::exit(0x0100);
+    } else if arguments.occurrences_of("url") == 0 {
+        println!("please provide an agrument: --url or --profile --help for instruction");
+        process::exit(0x0100);
     }
 
+    println!("url count: {}", arguments.occurrences_of("url"));
+    let url = arguments.value_of("url").unwrap();
+
     let parsed_url = Url::parse(&url[..]).expect("Could not parse url");
-    let path = "/";
+    let path = parsed_url.path();
     let port;
     if parsed_url.scheme().eq("http") {
         port = 80;  // http
@@ -71,10 +67,10 @@ fn main() {
         }
     };
     let header = format!("GET {} HTTP/1.1\r\nHost: {}\r\nConnection: Keep-Alive\r\n\r\n", path.clone(), host.clone());
-
+    println!("header: {}", header);
     let connector = SslConnector::builder(SslMethod::tls()).unwrap().build();
     let stream = TcpStream::connect(format!("{}:{}",host,port)).unwrap();
-    stream.set_read_timeout(Some(Duration::from_millis(100))).expect("set_read_timeout call failed");
+    stream.set_read_timeout(Some(Duration::from_millis(1000))).expect("set_read_timeout call failed");
     let mut stream = connector.connect(host, stream).unwrap();
 
     // Send HTTP request
@@ -82,8 +78,9 @@ fn main() {
 
     let mut buffer = vec![0 as u8; 4096];
     // Make request and return response as string
-    loop {
-        let bytes_read = match stream.read(&mut buffer) {
+    let mut bytes_read = 1;
+    while bytes_read > 0 {
+        bytes_read = match stream.read(&mut buffer) {
             Ok(bytes) => bytes,
             Err(_) => {
                 //finished reading
