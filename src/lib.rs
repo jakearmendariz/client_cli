@@ -12,21 +12,17 @@ use lazy_static::lazy_static;
 use threadpool::ThreadPool;
 use std::cmp;
 use std::str;
-// use pbr::ProgressBar;
-use indicatif::ProgressBar;
+
 
 const PROFILE_HOST:&str = "my-worker.jakearmendariz.workers.dev";
 const HTTPS_PORT:u16 = 443;
-const PROFILE_PATH:&str = "/projects";
+const PROFILE_PATH:&str = "/";
 // Time to wait before coutning request as a failure (in ms)
 const WAIT_TIME:i64 = 1000;
 const MAX_THREADS:usize = 100;
 
 lazy_static! {
     static ref TIMES:std::sync::Arc<std::sync::Mutex<Vec<i64>>> = Arc::new(Mutex::new(vec![]));
-    // static ref PROGRESS:std::sync::Arc<std::sync::Mutex<ProgressBar>> = Arc::new(Mutex::new(ProgressBar::new(trials as u64)));
-    // static ref PROGRESS:std::sync::Arc<ProgressBar<u64>> = Arc::new(ProgressBar::new(100 as u64));
-    static ref PROGRESS:std::sync::Arc<std::sync::Mutex<ProgressBar>> = Arc::new(Mutex::new(ProgressBar::new(1000)));
 }
 lazy_static! {
     static ref ERRORS:std::sync::Arc<std::sync::Mutex<HashSet<u16>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -41,16 +37,9 @@ pub fn multi_threaded_diagnostics(trials:u16) {
     let thread_count = cmp::min(MAX_THREADS, trials as usize);
     let pool = ThreadPool::new(thread_count);
 
-    let mut progress = PROGRESS.lock().unwrap();
-    *progress = ProgressBar::new(trials as u64);
-    // pb.format("╢▌▌░╟");
-
     for i in 0..trials {
         let diagnostics = Arc::clone(&diagnostics);
         let error_codes = Arc::clone(&error_codes);
-
-        let progress =  Arc::clone(&PROGRESS);
-
         pool.execute(move || {
             let sw = Stopwatch::start_new();
             match request_profile(i) {
@@ -73,12 +62,10 @@ pub fn multi_threaded_diagnostics(trials:u16) {
                     errors.insert(e.kind());
                 }
             }
-            let mut pb = progress.lock().unwrap();
-            pb.inc(1);
+
         }); 
     }
     pool.join();
-    progress.finish();
     assert_eq!(0, pool.active_count());
     let mut diag = diagnostics.lock().unwrap();
     diag.print(trials);
@@ -115,13 +102,10 @@ fn request_profile(request_id:u16) -> Result<usize,io::Error> {
 
     // Format HTTP request
     let header = format!("GET {} HTTP/1.1\r\nHost: {}\r\nConnection: Keep-Alive\r\n\r\n", PROFILE_PATH.clone(), PROFILE_HOST.clone());
-    
 
     let mut buffer = vec![0 as u8; 4096];
     // Make request and count # of bytes
     let mut total_bytes_read = 0;
-    let mut progress = PROGRESS.lock().unwrap();
-    // progress.inc(1);
     let sw = Stopwatch::start_new();
     let mut first_read:bool = true;
     stream.write(header.as_bytes())?;
@@ -138,6 +122,7 @@ fn request_profile(request_id:u16) -> Result<usize,io::Error> {
                 break;
             }
         };
+        //gets the response code
         if first_read && bytes_read > 12{
             let mut errors = ERRORS.lock().unwrap();
             let buffer_str = str::from_utf8(&buffer[0..30]).unwrap();
@@ -182,9 +167,9 @@ impl Diagnostics {
     }
 
     fn timing_statistics(&mut self) {
-        let times = TIMES.lock().unwrap();
+        let mut times = TIMES.lock().unwrap();
         let mean:f64 = times.iter().sum::<i64>() as f64 / times.len() as f64;
-        self.times.sort();
+        times.sort();
         let median = times[times.len()/2];
         println!("mean time: {}\nmedian time: {}\nmax time: {}\nmin time: {}", mean, median, times.last().unwrap(), times[0]);
     }

@@ -87,7 +87,13 @@ fn main() {
                 break;
             }
         };
-        let buffer_str = str::from_utf8(&buffer[0..bytes_read]).unwrap();
+        let buffer_str = match str::from_utf8(&buffer[0..bytes_read]) {
+            Ok(string) => string,
+            Err(_) => {
+                //invalid byte sequence
+                ""
+            }
+        };
         println!("{:?}", buffer_str);
     }
 }
