@@ -76,6 +76,7 @@ pub fn multi_threaded_diagnostics(trials:u16) {
     }
 }
 
+
 // Connects and sends a get request to cloudfare worker host
 fn request_profile(request_id:u16) -> Result<usize,io::Error> {
     // Open tcp socket connection. I used a ssl library I hope that is fine
